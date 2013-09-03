@@ -40,9 +40,9 @@
   :name "Snappy"
   :description "An implementation of Snappy compression."
   :long-description
-  "An implementation of Google's Snappy compression algorithm, which is designed for speed
-   of compression and decompression.")
-  :version "0.0"
+  "An implementation of Google's Snappy compression algorithm, which is
+ designed for speed of compression and decompression."
+  :version "0.1"
   :author "Robert Brown"
   :license "New BSD license.  See the copyright messages in individual files."
   :depends-on (com.google.base varint)
