@@ -28,20 +28,12 @@
 
 ;;;; Author: brown@google.com (Robert Brown)
 
-(in-package #:common-lisp-user)
-
-(defpackage #:snappy-system
-  (:documentation "System definition for package SNAPPY.")
-  (:use #:common-lisp #:asdf))
-
-(in-package #:snappy-system)
-
 (defsystem snappy
   :name "Snappy"
   :description "An implementation of Snappy compression."
   :long-description
-  "An implementation of Google's Snappy compression algorithm, which is
- designed for speed of compression and decompression."
+"An implementation of Google's Snappy compression algorithm, which is designed
+for speed of compression and decompression."
   :version "0.1"
   :author "Robert Brown"
   :license "New BSD license.  See the copyright messages in individual files."

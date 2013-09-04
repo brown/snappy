@@ -28,14 +28,6 @@
 
 ;;;; Author: brown@google.com (Robert Brown)
 
-(in-package #:common-lisp-user)
-
-(defpackage #:snappy-test-system
-  (:documentation "System definition for testing package SNAPPY.")
-  (:use #:common-lisp #:asdf))
-
-(in-package #:snappy-test-system)
-
 (defsystem snappy-test
   :depends-on (hu.dwim.stefil snappy)
   :components
