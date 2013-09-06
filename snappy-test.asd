@@ -31,6 +31,7 @@
 (defsystem snappy-test
   :depends-on (acm-random
                hu.dwim.stefil
+               nibbles
                snappy)
   :components
   ((:file "snappy_test")))
