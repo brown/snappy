@@ -29,7 +29,9 @@
 ;;;; Author: brown@google.com (Robert Brown)
 
 (defsystem snappy-test
-  :depends-on (hu.dwim.stefil snappy)
+  :depends-on (acm-random
+               hu.dwim.stefil
+               snappy)
   :components
   ((:file "snappy_test")))
 
