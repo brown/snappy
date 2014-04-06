@@ -41,7 +41,6 @@
   (:export #:test-snappy))
 
 (in-package #:snappy-test)
-(declaim #.*optimize-default*)
 
 (defsuite (test-snappy :in root-suite) ()
   (run-child-tests))
@@ -120,3 +119,162 @@ that the compressed copy produces OCTETS when uncompressed."
                     do (setf (aref octets index) octet)
                        (incf index))))
         (verify-octets octets)))))
+
+(declaim (ftype (function (uint32) (values (integer -1 31) &optional))
+                count-trailing-zeroes-uint32)
+         (inline count-trailing-zeroes-uint32))
+
+(defun count-trailing-zeroes-uint32 (n)
+  (declare (type uint32 n))
+  (1- (integer-length (logand n (- n)))))
+
+(declaim (ftype (function (uint64) (values (integer -1 63) &optional))
+                count-trailing-zeroes-uint64)
+         (inline count-trailing-zeroes-uint64))
+
+(defun count-trailing-zeroes-uint64 (n)
+  (declare (type uint64 n))
+  (1- (integer-length (logand n (- n)))))
+
+(declaim (ftype (function (octet-vector vector-index octet-vector vector-index vector-index)
+                          (values vector-index &optional))
+                find-match-length-64)
+         (inline find-match-length-64))
+
+(defun find-match-length-64 (s1 s1-index s2 s2-index s2-limit)
+  (declare (type octet-vector s1 s2)
+           (type vector-index s1-index s2-index s2-limit))
+  (let ((matched s1-index))
+    (declare (type vector-index matched))
+    (loop while (<= s2-index (- s2-limit 8)) do
+      (let ((s2-data (nibbles:ub64ref/le s2 s2-index))
+            (s1-data (nibbles:ub64ref/le s1 matched)))
+        (if (= s2-data s1-data)
+            (progn (incf s2-index 8)
+                   (incf matched 8))
+            (let* ((x (logxor s2-data s1-data))
+                   (matching-bits (count-trailing-zeroes-uint64 x)))
+              (incf matched (ash matching-bits -3))
+              (return-from find-match-length-64 (- matched s1-index))))))
+    (loop while (< s2-index s2-limit) do
+      (if (= (aref s1 matched) (aref s2 s2-index))
+          (progn (incf s2-index)
+                 (incf matched))
+          (return-from find-match-length-64 (- matched s1-index))))
+    (- matched s1-index)))
+
+(declaim (ftype (function (octet-vector vector-index octet-vector vector-index vector-index)
+                          (values vector-index &optional))
+                find-match-length-32)
+         (inline find-match-length-32))
+
+(defun find-match-length-32 (s1 s1-index s2 s2-index s2-limit)
+  (declare (type octet-vector s1 s2)
+           (type vector-index s1-index s2-index s2-limit))
+  (let ((matched s1-index))
+    (declare (type vector-index matched))
+    (loop while (<= s2-index (- s2-limit 4)) do
+      (unless (= (nibbles:ub32ref/le s1 matched) (nibbles:ub32ref/le s2 s2-index))
+        (return))
+      (incf s2-index 4)
+      (incf matched 4))
+    (if (<= s2-index (- s2-limit 4))
+        (let* ((x (logxor (nibbles:ub32ref/le s1 matched) (nibbles:ub32ref/le s2 s2-index)))
+               (matching-bits (count-trailing-zeroes-uint64 x)))
+          (incf matched (ash matching-bits -3)))
+        (loop while (and (< s2-index s2-limit) (= (aref s1 matched) (aref s2 s2-index))) do
+          (incf s2-index)
+          (incf matched)))
+    (- matched s1-index)))
+
+(deftest test-find-match-length ()
+  (flet ((verify-match-length (s1 s2 limit)
+           (let* ((s1-octets (string-to-utf8-octets (concatenate 'string s1 #(#\Null))))
+                  (s2-octets (string-to-utf8-octets (concatenate 'string s2 #(#\Null))))
+                  (match-32 (find-match-length-32 s1-octets 0 s2-octets 0 limit))
+                  (match-64 (find-match-length-64 s1-octets 0 s2-octets 0 limit)))
+             (is (= match-32 match-64))
+             match-32)))
+
+;; Generate two octet arrays of needed lengths, identical on overlap.
+;; 8 bits in each octet where difference should be
+;; Try all 256^2 possible differences at position.
+
+
+    ;; Exercise all different code paths through the function.
+
+    ;; 64-bit version
+
+    ;; Hit s1_limit in 64-bit loop, hit s1_limit in single-character loop.
+    (is (= 6 (verify-match-length "012345" "012345" 6)))
+    (is (= 11 (verify-match-length "01234567abc" "01234567abc" 11)))
+
+    ;; Hit s1_limit in 64-bit loop, find a non-match in single-character loop.
+    (is (= 9 (verify-match-length "01234567abc" "01234567axc" 9)))
+
+    ;; Same, but edge cases.
+    (is (= 11 (verify-match-length "01234567abc!" "01234567abc!" 11)))
+    (is (= 11 (verify-match-length "01234567abc!" "01234567abc?" 11)))
+
+    ;; Find non-match at once in first loop.
+    (is (= 0 (verify-match-length "01234567xxxxxxxx" "?1234567xxxxxxxx" 16)))
+    (is (= 1 (verify-match-length "01234567xxxxxxxx" "0?234567xxxxxxxx" 16)))
+    (is (= 4 (verify-match-length "01234567xxxxxxxx" "01237654xxxxxxxx" 16)))
+    (is (= 7 (verify-match-length "01234567xxxxxxxx" "0123456?xxxxxxxx" 16)))
+
+    ;; Find non-match in first loop after one block.
+    (is (= 8 (verify-match-length "abcdefgh01234567xxxxxxxx" "abcdefgh?1234567xxxxxxxx" 24)))
+    (is (= 9 (verify-match-length "abcdefgh01234567xxxxxxxx" "abcdefgh0?234567xxxxxxxx" 24)))
+    (is (= 12 (verify-match-length "abcdefgh01234567xxxxxxxx" "abcdefgh01237654xxxxxxxx" 24)))
+    (is (= 15 (verify-match-length "abcdefgh01234567xxxxxxxx" "abcdefgh0123456?xxxxxxxx" 24)))
+
+    ;; 32-bit version:
+
+    ;; Short matches.
+    (is (= 0 (verify-match-length "01234567" "?1234567" 8)))
+    (is (= 1 (verify-match-length "01234567" "0?234567" 8)))
+    (is (= 2 (verify-match-length "01234567" "01?34567" 8)))
+    (is (= 3 (verify-match-length "01234567" "012?4567" 8)))
+    (is (= 4 (verify-match-length "01234567" "0123?567" 8)))
+    (is (= 5 (verify-match-length "01234567" "01234?67" 8)))
+    (is (= 6 (verify-match-length "01234567" "012345?7" 8)))
+    (is (= 7 (verify-match-length "01234567" "0123456?" 8)))
+    (is (= 7 (verify-match-length "01234567" "0123456?" 7)))
+    (is (= 7 (verify-match-length "01234567!" "0123456??" 7)))
+
+    ;; Hit s1_limit in 32-bit loop, hit s1_limit in single-character loop.
+    (is (= 10 (verify-match-length "xxxxxxabcd" "xxxxxxabcd" 10)))
+    (is (= 10 (verify-match-length "xxxxxxabcd?" "xxxxxxabcd?" 10)))
+    (is (= 13 (verify-match-length "xxxxxxabcdef" "xxxxxxabcdef" 13)))
+
+    ;; Same, but edge cases.
+    (is (= 12 (verify-match-length "xxxxxx0123abc!" "xxxxxx0123abc!" 12)))
+    (is (= 12 (verify-match-length "xxxxxx0123abc!" "xxxxxx0123abc?" 12)))
+
+    ;; Hit s1_limit in 32-bit loop, find a non-match in single-character loop.
+    (is (= 11 (verify-match-length "xxxxxx0123abc" "xxxxxx0123axc" 13)))
+
+    ;; Find non-match at once in first loop.
+    (is (= 6 (verify-match-length "xxxxxx0123xxxxxxxx" "xxxxxx?123xxxxxxxx" 18)))
+    (is (= 7 (verify-match-length "xxxxxx0123xxxxxxxx" "xxxxxx0?23xxxxxxxx" 18)))
+    (is (= 8 (verify-match-length "xxxxxx0123xxxxxxxx" "xxxxxx0132xxxxxxxx" 18)))
+    (is (= 9 (verify-match-length "xxxxxx0123xxxxxxxx" "xxxxxx012?xxxxxxxx" 18)))
+
+    ;; Same, but edge cases.
+    (is (= 6 (verify-match-length "xxxxxx0123" "xxxxxx?123" 10)))
+    (is (= 7 (verify-match-length "xxxxxx0123" "xxxxxx0?23" 10)))
+    (is (= 8 (verify-match-length "xxxxxx0123" "xxxxxx0132" 10)))
+    (is (= 9 (verify-match-length "xxxxxx0123" "xxxxxx012?" 10)))
+
+    ;; Find non-match in first loop after one block.
+    (is (= 10 (verify-match-length "xxxxxxabcd0123xx" "xxxxxxabcd?123xx" 16)))
+    (is (= 11 (verify-match-length "xxxxxxabcd0123xx" "xxxxxxabcd0?23xx" 16)))
+    (is (= 12 (verify-match-length "xxxxxxabcd0123xx" "xxxxxxabcd0132xx" 16)))
+    (is (= 13 (verify-match-length "xxxxxxabcd0123xx" "xxxxxxabcd012?xx" 16)))
+
+    ;; Same, but edge cases.
+    (is (= 10 (verify-match-length "xxxxxxabcd0123" "xxxxxxabcd?123" 14)))
+    (is (= 11 (verify-match-length "xxxxxxabcd0123" "xxxxxxabcd0?23" 14)))
+    (is (= 12 (verify-match-length "xxxxxxabcd0123" "xxxxxxabcd0132" 14)))
+    (is (= 13 (verify-match-length "xxxxxxabcd0123" "xxxxxxabcd012?" 14)))
+    ))

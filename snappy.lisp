@@ -31,7 +31,6 @@
 ;;;; Snappy compression of octet vectors.
 
 (in-package #:snappy)
-(declaim #.*optimize-fast-unsafe*)
 
 (defconst +maximum-hash-bits+ 14)
 (defconst +maximum-hash-table-size+ (expt 2 +maximum-hash-bits+))
@@ -405,7 +404,7 @@
              (assert (<= (integer-length copy-offset) 3))
              (assert (<= (integer-length length) 7))
              (logior length (ash copy-offset 8) (ash extra 11))))
-    (declare #.*optimize-default*)  ; XXXX should this be the file default??
+    (declare #.*optimize-default*)
     ;; Initialize dst with invalid entries.
     (let* ((illegal-entry #xffff)
            (dst (make-array 256

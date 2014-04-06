@@ -34,13 +34,14 @@
   :long-description
 "An implementation of Google's Snappy compression algorithm, which is designed
 for speed of compression and decompression."
-  :version "0.2"
+  :version "0.3"
   :author "Robert Brown"
   :license "New BSD license.  See the copyright messages in individual files."
+  :defsystem-depends-on (com.google.base)
   :depends-on (com.google.base
                nibbles
                varint)
   :in-order-to ((test-op (test-op snappy-test)))
   :components
   ((:file "package")
-   (:file "snappy" :depends-on ("package"))))
+   (:fast-unsafe-source-file "snappy" :depends-on ("package"))))
