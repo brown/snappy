@@ -29,6 +29,11 @@
 ;;;; Author: brown@google.com (Robert Brown)
 
 (defsystem snappy-test
+  :name "Snappy test"
+  :description "Test code for package SNAPPY."
+  :version "0.3"
+  :author "Robert Brown"
+  :license "New BSD license.  See the copyright messages in individual files."
   :depends-on (acm-random
                hu.dwim.stefil
                nibbles
