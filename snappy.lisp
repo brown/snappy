@@ -459,5 +459,5 @@
 
 We use eight bits for the length even though 7 would have sufficed
 because of efficiency reasons:
-    (1) Extracting a byte is faster than a bit-field
+    (1) Extracting a byte is faster than a bit field
     (2) It properly aligns copy offset so we do not need a <<8")
