@@ -35,13 +35,29 @@
 "An implementation of Google's Snappy compression algorithm, which is designed
 for speed of compression and decompression."
   :version "0.3"
-  :author "Robert Brown"
+  :author "Robert Brown <robert.brown@gmail.com>"
   :license "New BSD license.  See the copyright messages in individual files."
   :defsystem-depends-on (com.google.base)
   :depends-on (com.google.base
                nibbles
                varint)
-  :in-order-to ((test-op (test-op snappy-test)))
+  :in-order-to ((test-op (test-op snappy/test)))
   :components
   ((:file "package")
    (:fast-unsafe-source-file "snappy" :depends-on ("package"))))
+
+(defsystem snappy/test
+  :name "Snappy test"
+  :description "Test code for package SNAPPY."
+  :version "0.3"
+  :author "Robert Brown <robert.brown@gmail.com>"
+  :license "New BSD license.  See the copyright messages in individual files."
+  :depends-on (acm-random
+               hu.dwim.stefil
+               nibbles
+               snappy)
+  :components
+  ((:file "snappy-test")))
+
+(defmethod perform ((operation test-op) (component (eql (find-system 'snappy/test))))
+  (symbol-call 'snappy-test 'test-snappy))
