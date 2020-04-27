@@ -1,8 +1,0 @@
-snappy
-======
-
-A Common Lisp implementation of Google's Snappy data compression library.
-The original name for Google's Snappy compression library was Zippy.
-For more information, see Google's Snappy project page:
-
-  http://code.google.com/p/snappy/

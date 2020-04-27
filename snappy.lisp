@@ -70,6 +70,8 @@
                 maximum-compressed-length))
 
 (defun maximum-compressed-length (uncompressed-length)
+  "Returns the maximum size a vector of length UNCOMPRESSED-LENGTH may take up
+after it is compressed."
   (declare (type vector-index uncompressed-length))
   (+ 32 uncompressed-length (floor uncompressed-length 6)))
 
@@ -78,6 +80,8 @@
                 uncompressed-length))
 
 (defun uncompressed-length (buffer index limit)
+  "Returns the uncompressed length of the compressed data stored in BUFFER from
+position INDEX to LIMIT."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
   (let ((length (varint:parse-uint32-carefully buffer index limit)))
@@ -266,6 +270,10 @@
                 compress))
 
 (defun compress (buffer index limit)
+  "Compresses the contents of BUFFER, a vector of (UNSIGNED-BYTE 8), from
+position INDEX to position LIMIT.  Returns two values, a vector of
+type (UNSIGNED-BYTE 8) holding the compressed data and an integer indicating
+the number of compressed octets in the vector."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
   (let* ((length (- limit index))
@@ -375,6 +383,8 @@
                 uncompress))
 
 (defun uncompress (buffer index limit)
+  "Uncompresses BUFFER, a vector of (UNSIGNED-BYTE 8), from position INDEX to
+LIMIT.  Returns the uncompressed data as a vector of (UNSIGNED-BYTE 8)."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
   (let* ((uncompressed-length (uncompressed-length buffer index limit))
