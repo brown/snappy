@@ -306,8 +306,7 @@ the number of compressed octets in the vector."
                            (decf count 59)
                            (when (> (+ in count) in-limit)
                              (error "input buffer exhausted 1"))
-                           ;; I cannot be of type VECTOR-INDEX because I becomes -1 in the loop.
-                           (loop for i of-type fixnum from (1- count) downto 0 do
+                           (loop for i from (1- count) downto 0 do
                              (setf n (ash n 8))
                              (setf (ldb (byte 8 0) n) (aref input-buffer (+ in i))))
                            (incf in count)
