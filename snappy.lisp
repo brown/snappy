@@ -294,13 +294,7 @@ the number of compressed octets in the vector."
   (multiple-value-bind (uncompressed-size in)
       (varint:parse-uint32-carefully input-buffer in in-limit)
     (check-type uncompressed-size vector-index)
-    (let ((initial-out out)
-          ;; XXXX: The check-type above should be sufficient to convince
-          ;; SBCL that uncompressed-size is an vector-index, but it's
-          ;; not.  File a bug report.
-          (uncompressed-size uncompressed-size))
-      (declare (type vector-index uncompressed-size))
-      ;; XXXX: Compiler outputs an optimization note about this comparison.
+    (let ((initial-out out))
       (when (> uncompressed-size (- out-limit out))
         (error "output buffer too small"))
       (flet ((literal-length (octet)
@@ -312,12 +306,11 @@ the number of compressed octets in the vector."
                            (decf count 59)
                            (when (> (+ in count) in-limit)
                              (error "input buffer exhausted 1"))
-                           ;; XXXX i below should have type vector-index
+                           ;; I cannot be of type VECTOR-INDEX because I becomes -1 in the loop.
                            (loop for i of-type fixnum from (1- count) downto 0 do
                              (setf n (ash n 8))
                              (setf (ldb (byte 8 0) n) (aref input-buffer (+ in i))))
-                           ;; XXXX (incf in count)
-                           (setf in (the vector-index (+ in count)))
+                           (incf in count)
                            n)))))
              (copy-parameters (octet opcode)
                (let ((offset (aref input-buffer in))
@@ -362,8 +355,7 @@ the number of compressed octets in the vector."
                   (replace output-buffer input-buffer
                            :start1 out :end1 (+ out length)
                            :start2 in :end2 (+ in length))
-                  ;; XXXX: (incf in length) causes a optimization note
-                  (setf in (the vector-index (+ in length)))
+                  (incf in length)
                   (incf out length))
                 ;; Copy from an earlier position in output-buffer.
                 (multiple-value-bind (offset length)
