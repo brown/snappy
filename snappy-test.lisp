@@ -35,9 +35,24 @@
 (defpackage #:snappy-test
   (:documentation "Test code in the SNAPPY package.")
   (:use #:common-lisp
-        #:com.google.base
         #:hu.dwim.stefil
         #:snappy)
+  (:import-from #:acm-random #:acm-random)
+  (:import-from #:com.google.base
+                #:make-octet-vector
+                #:octet-vector
+                #:uint32
+                #:uint64
+                #:string-to-utf8-octets
+                #:vector-index)
+  (:import-from #:nibbles
+                #:ub32ref/le
+                #:ub64ref/le)
+  (:import-from #:random
+                #:next-uint32
+                #:one-in
+                #:skewed-uint32
+                #:uniform-uint32)
   (:export #:test-snappy))
 
 (in-package #:snappy-test)
@@ -78,8 +93,8 @@ that the compressed copy produces OCTETS when uncompressed."
   (let ((input (make-octet-vector (* 2 4 20000)))
         (index 0))
     (flet ((add-random-octets (i)
-             (let* ((random (make-instance 'acm-random:acm-random :seed i)))
-               (setf (nibbles:ub32ref/le input index) (random:next-uint32 random))
+             (let* ((random (make-instance 'acm-random :seed i)))
+               (setf (ub32ref/le input index) (next-uint32 random))
                (incf index 4))))
       (loop for i from 0 below 20000 do (add-random-octets i))
       (loop for i from 19999 downto 0 do (add-random-octets i)))
@@ -100,20 +115,16 @@ that the compressed copy produces OCTETS when uncompressed."
       (verify-octets octets))))
 
 (deftest random-buffers ()
-  (let ((random (make-instance 'acm-random:acm-random)))
+  (let ((random (make-instance 'acm-random)))
     (dotimes (i 20000)
       (let* ((length (if (< i 100)
-                         (+ 65536 (random:uniform-uint32 random 65536))
-                         (random:uniform-uint32 random 4096)))
+                         (+ 65536 (uniform-uint32 random 65536))
+                         (uniform-uint32 random 4096)))
              (octets (make-octet-vector length))
              (index 0))
           (loop while (< index length) do
-            (let ((run-length (if (random:one-in random 10)
-                                  (random:skewed-uint32 random 8)
-                                  1))
-                  (octet (if (< i 100)
-                             (random:uniform-uint32 random 256)
-                             (random:skewed-uint32 random 3))))
+            (let ((run-length (if (one-in random 10) (skewed-uint32 random 8) 1))
+                  (octet (if (< i 100) (uniform-uint32 random 256) (skewed-uint32 random 3))))
               (loop repeat run-length
                     while (< index length)
                     do (setf (aref octets index) octet)
@@ -147,8 +158,8 @@ that the compressed copy produces OCTETS when uncompressed."
   (let ((matched s1-index))
     (declare (type vector-index matched))
     (loop while (<= s2-index (- s2-limit 8)) do
-      (let ((s2-data (nibbles:ub64ref/le s2 s2-index))
-            (s1-data (nibbles:ub64ref/le s1 matched)))
+      (let ((s2-data (ub64ref/le s2 s2-index))
+            (s1-data (ub64ref/le s1 matched)))
         (if (= s2-data s1-data)
             (progn (incf s2-index 8)
                    (incf matched 8))
@@ -174,12 +185,12 @@ that the compressed copy produces OCTETS when uncompressed."
   (let ((matched s1-index))
     (declare (type vector-index matched))
     (loop while (<= s2-index (- s2-limit 4)) do
-      (unless (= (nibbles:ub32ref/le s1 matched) (nibbles:ub32ref/le s2 s2-index))
+      (unless (= (ub32ref/le s1 matched) (ub32ref/le s2 s2-index))
         (return))
       (incf s2-index 4)
       (incf matched 4))
     (if (<= s2-index (- s2-limit 4))
-        (let* ((x (logxor (nibbles:ub32ref/le s1 matched) (nibbles:ub32ref/le s2 s2-index)))
+        (let* ((x (logxor (ub32ref/le s1 matched) (ub32ref/le s2 s2-index)))
                (matching-bits (count-trailing-zeroes-uint64 x)))
           (incf matched (ash matching-bits -3)))
         (loop while (and (< s2-index s2-limit) (= (aref s1 matched) (aref s2 s2-index))) do

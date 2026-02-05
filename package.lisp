@@ -34,7 +34,21 @@
   (:documentation
    "An implementation of Google's Snappy compression algorithm, which is
 designed for speed of compression and decompression.")
-  (:use #:common-lisp #:com.google.base)
+  (:use #:common-lisp)
+  (:import-from #:com.google.base
+                #:defconst
+                #:make-octet-vector
+                #:+maximum-vector-index+
+                #:octet-vector
+                #:*optimize-default*
+                #:uint32
+                #:vector-index)
+  (:import-from #:nibbles
+                #:ub16ref/le
+                #:ub32ref/le)
+  (:import-from #:varint
+                #:encode-uint32-carefully
+                #:parse-uint32-carefully)
   (:export #:compress
            #:maximum-compressed-length
            #:uncompress

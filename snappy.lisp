@@ -84,7 +84,7 @@ after it is compressed."
 position INDEX to LIMIT."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
-  (let ((length (varint:parse-uint32-carefully buffer index limit)))
+  (let ((length (parse-uint32-carefully buffer index limit)))
     (check-type length vector-index)
     length))
 
@@ -136,12 +136,12 @@ position INDEX to LIMIT."
         ((< offset 65536)
          (setf (aref output-buffer (postincf out))
                (logior +copy-2-byte-offset+ (ash (1- length) 2)))
-         (setf (nibbles:ub16ref/le output-buffer out) offset)
+         (setf (ub16ref/le output-buffer out) offset)
          (incf out 2))
         (t
          (setf (aref output-buffer (postincf out))
                (logior +copy-4-byte-offset+ (ash (1- length) 2)))
-         (setf (nibbles:ub32ref/le output-buffer out) offset)
+         (setf (ub32ref/le output-buffer out) offset)
          (incf out 4)))
   out)
 
@@ -184,7 +184,7 @@ position INDEX to LIMIT."
          (next-emit in)
          (safe-in-limit (- in-limit 13))
          (initial-out out))
-    (setf out (varint:encode-uint32-carefully output-buffer out out-limit in-length))
+    (setf out (encode-uint32-carefully output-buffer out out-limit in-length))
     (do ()
         ((>= in safe-in-limit))
       (let* ((k (hash input-buffer in mask))
@@ -292,7 +292,7 @@ the number of compressed octets in the vector."
   (declare (type octet-vector input-buffer output-buffer)
            (type vector-index in in-limit out out-limit))
   (multiple-value-bind (uncompressed-size in)
-      (varint:parse-uint32-carefully input-buffer in in-limit)
+      (parse-uint32-carefully input-buffer in in-limit)
     (check-type uncompressed-size vector-index)
     (let ((initial-out out))
       (when (> uncompressed-size (- out-limit out))
@@ -360,7 +360,7 @@ the number of compressed octets in the vector."
                 (multiple-value-bind (offset length)
                     (copy-parameters octet opcode)
                   (let ((copy (- out offset)))
-                    (when (or (< copy initial-out))
+                    (when (< copy initial-out)
                       (error "invalid offset 1"))
                     ;; Source and destination may overlap.
                     (loop repeat length do
