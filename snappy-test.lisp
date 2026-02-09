@@ -40,10 +40,12 @@
   (:import-from #:acm-random #:acm-random)
   (:import-from #:com.google.base
                 #:make-octet-vector
+                #:octet
                 #:octet-vector
                 #:uint32
                 #:uint64
                 #:string-to-utf8-octets
+                #:utf8-octets-to-string
                 #:vector-index)
   (:import-from #:nibbles
                 #:ub32ref/le
@@ -201,7 +203,7 @@ that the compressed copy produces OCTETS when uncompressed."
           (incf matched)))
     (- matched s1-index)))
 
-(deftest test-find-match-length ()
+(deftest find-match-length ()
   (flet ((verify-match-length (s1 s2 limit)
            (let* ((s1-octets (string-to-utf8-octets (concatenate 'string s1 #(#\Null))))
                   (s2-octets (string-to-utf8-octets (concatenate 'string s2 #(#\Null))))
@@ -318,3 +320,124 @@ that the compressed copy produces OCTETS when uncompressed."
   ;; https://github.com/google/snappy/blob/master/format_description.txt
   (signals error
     (uncompressed-length (make-octet-vector 5 :initial-contents '(#x80 #x80 #x80 #x80 #x10)) 0 5)))
+
+(deftest decode-copy-4 ()
+  (let* ((dots (make-string 65536 :initial-element #\.))
+         (octets `(;; decoded length is 65545
+                   #x89 #x80 #x04
+                   ;; 4-byte literal "pqrs"
+                   #x0c ,(char-code #\p) ,(char-code #\q) ,(char-code #\r) ,(char-code #\s)
+                   ;; 65536-byte literal dots
+                   #xf4 #xff #xff ,@(loop for ch across dots :collect (char-code ch))
+                   ;; copy 4 with length 5 and offset 65540
+                   #x13 #x04 #x00 #x01 #x00))
+         (compressed (make-octet-vector (length octets) :initial-contents octets))
+         (uncompressed (uncompress compressed 0 (length compressed)))
+         (got (utf8-octets-to-string uncompressed))
+         (want (concatenate 'string "pqrs" dots "pqrs.")))
+    (is (string= got want))))
+
+(defun read-data-file (file-name &optional limit)
+  (let ((data-pathname
+          (asdf/system:system-relative-pathname 'snappy
+                                                (concatenate 'string "testdata/" file-name))))
+    (with-open-file (stream data-pathname :element-type 'octet :if-does-not-exist :error)
+      (let* ((octet-count (if limit limit (file-length stream)))
+             (data (make-octet-vector octet-count))
+             (octets-read (read-sequence data stream)))
+        (assert (= octets-read octet-count))
+        data))))
+
+(deftest uncompress-golden ()
+  (let ((golden-compressed (read-data-file "Isaac.Newton-Opticks.txt.rawsnappy"))
+        (golden (read-data-file "Isaac.Newton-Opticks.txt")))
+    (let ((uncompressed (uncompress golden-compressed 0 (length golden-compressed))))
+      (is (not (mismatch uncompressed golden :test #'=))))))
+
+#+nil                                   ; currently fails!
+(deftest compress-golden ()
+  (let ((golden (read-data-file "Isaac.Newton-Opticks.txt"))
+        (golden-compressed (read-data-file "Isaac.Newton-Opticks.txt.rawsnappy")))
+    (multiple-value-bind (compressed compressed-length)
+        (compress golden 0 (length golden))
+        (declare (ignore compressed-length))
+      (is (not (mismatch compressed golden-compressed :test #'=))))))
+
+(deftest emit-literal ()
+  (let ((test-cases '((1 (#x00))
+		      (2 (#x04))
+		      (59 (#xe8))
+		      (60 (#xec))
+		      (61 (#xf0 #x3c))
+		      (62 (#xf0 #x3d))
+		      (254 (#xf0 #xfd))
+		      (255 (#xf0 #xfe))
+		      (256 (#xf0 #xff))
+		      (257 (#xf4 #x00 #x01))
+		      (65534 (#xf4 #xfd #xff))
+		      (65535 (#xf4 #xfe #xff))
+		      (65536 (#xf4 #xff #xff))))
+        (dest (make-octet-vector 70000)))
+    (loop for (length want-octets) in test-cases do
+      (let* ((want (make-octet-vector (length want-octets) :initial-contents want-octets))
+             (literal (make-array length :element-type 'octet :initial-element #x99))
+             (out (snappy::emit-literal literal 0 dest 0 length)))
+        (is (not (mismatch dest literal :start1 (length want) :end1 out)))
+        (is (not (mismatch dest want :end1 (length want))))))))
+
+(deftest emit-copy ()
+  (let ((test-cases '((8 04 (#x01 #x08))
+		      (8 11 (#x1d #x08))
+		      (8 12 (#x2e #x08 #x00))
+		      (8 13 (#x32 #x08 #x00))
+		      (8 59 (#xea #x08 #x00))
+		      (8 60 (#xee #x08 #x00))
+		      (8 61 (#xf2 #x08 #x00))
+		      (8 62 (#xf6 #x08 #x00))
+		      (8 63 (#xfa #x08 #x00))
+		      (8 64 (#xfe #x08 #x00))
+		      (8 65 (#xee #x08 #x00 #x05 #x08))
+		      (8 66 (#xee #x08 #x00 #x09 #x08))
+		      (8 67 (#xee #x08 #x00 #x0d #x08))
+		      (8 68 (#xfe #x08 #x00 #x01 #x08))
+		      (8 69 (#xfe #x08 #x00 #x05 #x08))
+		      (8 80 (#xfe #x08 #x00 #x3e #x08 #x00))
+
+		      (256 04 (#x21 #x00))
+		      (256 11 (#x3d #x00))
+		      (256 12 (#x2e #x00 #x01))
+		      (256 13 (#x32 #x00 #x01))
+		      (256 59 (#xea #x00 #x01))
+		      (256 60 (#xee #x00 #x01))
+		      (256 61 (#xf2 #x00 #x01))
+		      (256 62 (#xf6 #x00 #x01))
+		      (256 63 (#xfa #x00 #x01))
+		      (256 64 (#xfe #x00 #x01))
+		      (256 65 (#xee #x00 #x01 #x25 #x00))
+		      (256 66 (#xee #x00 #x01 #x29 #x00))
+		      (256 67 (#xee #x00 #x01 #x2d #x00))
+		      (256 68 (#xfe #x00 #x01 #x21 #x00))
+		      (256 69 (#xfe #x00 #x01 #x25 #x00))
+		      (256 80 (#xfe #x00 #x01 #x3e #x00 #x01))
+
+		      (2048 04 (#x0e #x00 #x08))
+		      (2048 11 (#x2a #x00 #x08))
+		      (2048 12 (#x2e #x00 #x08))
+		      (2048 13 (#x32 #x00 #x08))
+		      (2048 59 (#xea #x00 #x08))
+		      (2048 60 (#xee #x00 #x08))
+		      (2048 61 (#xf2 #x00 #x08))
+		      (2048 62 (#xf6 #x00 #x08))
+		      (2048 63 (#xfa #x00 #x08))
+		      (2048 64 (#xfe #x00 #x08))
+		      (2048 65 (#xee #x00 #x08 #x12 #x00 #x08))
+		      (2048 66 (#xee #x00 #x08 #x16 #x00 #x08))
+		      (2048 67 (#xee #x00 #x08 #x1a #x00 #x08))
+		      (2048 68 (#xfe #x00 #x08 #x0e #x00 #x08))
+		      (2048 69 (#xfe #x00 #x08 #x12 #x00 #x08))
+		      (2048 80 (#xfe #x00 #x08 #x3e #x00 #x08))))
+        (dest (make-array 1024 :element-type 'octet :initial-element 0)))
+    (loop for (offset length want-octets) in test-cases do
+      (let* ((want (make-octet-vector (length want-octets) :initial-contents want-octets))
+             (out (snappy::emit-copy dest 0 offset length)))
+        (is (not (mismatch dest want :end1 out)))))))
