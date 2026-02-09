@@ -53,6 +53,9 @@
                 #:one-in
                 #:skewed-uint32
                 #:uniform-uint32)
+  (:import-from #:varint
+                #:data-exhausted
+                #:value-out-of-range)
   (:export #:test-snappy))
 
 (in-package #:snappy-test)
@@ -104,7 +107,7 @@ that the compressed copy produces OCTETS when uncompressed."
   (loop for size from 1 below 20000 by 23 do
     (let ((octets (make-octet-vector size)))
       (loop for i from 0 below size do
-        (setf (aref octets i) (+ (mod i 10) 97)))
+        (setf (aref octets i) (+ (mod i 10) (char-code #\a))))
       (verify-octets octets))))
 
 (deftest small-random ()
@@ -289,3 +292,29 @@ that the compressed copy produces OCTETS when uncompressed."
     (is (= 12 (verify-match-length "xxxxxxabcd0123" "xxxxxxabcd0132" 14)))
     (is (= 13 (verify-match-length "xxxxxxabcd0123" "xxxxxxabcd012?" 14)))
     ))
+
+(deftest max-block-size-maximum-compressed-length ()
+  (is (= 76490 (maximum-compressed-length 65536))))
+
+(deftest zero-length-vector ()
+  (verify-octets (make-octet-vector 0)))
+
+(deftest small-copy ()
+  (dotimes (count 32)
+    (let ((repeated-b (make-string count :initial-element #\b)))
+      (verify-string (concatenate 'string "aaaa" repeated-b "aaaabbbb")))))
+
+(deftest invalid-varint ()
+  ;; Varint parsing should signal either that the final octet has the continuation bit set or that
+  ;; the data buffer is exhausted.
+  (signals data-exhausted
+    (uncompressed-length (make-octet-vector 1 :initial-contents '(#xff)) 0 1))
+  ;; Varint value overflows a uint64.
+  (let ((octets '(#xff #xff #xff #xff #xff #xff #xff #xff #xff #xff #x00)))
+    (signals value-out-of-range
+      (uncompressed-length
+       (make-octet-vector (length octets) :initial-contents octets) 0 (length octets))))
+  ;; Snappy documentation says the maximum uncompressed buffer size is 2^32 - 1.
+  ;; https://github.com/google/snappy/blob/master/format_description.txt
+  (signals error
+    (uncompressed-length (make-octet-vector 5 :initial-contents '(#x80 #x80 #x80 #x80 #x10)) 0 5)))

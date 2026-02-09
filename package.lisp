@@ -48,7 +48,8 @@ designed for speed of compression and decompression.")
                 #:ub32ref/le)
   (:import-from #:varint
                 #:encode-uint32-carefully
-                #:parse-uint32-carefully)
+                #:parse-uint32-carefully
+                #:parse-uint64-carefully)
   (:export #:compress
            #:maximum-compressed-length
            #:uncompress

@@ -32,6 +32,12 @@
 
 (in-package #:snappy)
 
+(defconst +maximum-snappy-index+ (1- (expt 2 32)) "Largest valid index into Snappy data.")
+
+(deftype snappy-index ()
+  "Integer that can be used as a subscript for accessing a Snappy data vector."
+ `(integer 0 #.+maximum-snappy-index+))
+
 (defconst +maximum-hash-bits+ 14)
 (defconst +maximum-hash-table-size+ (expt 2 +maximum-hash-bits+))
 
@@ -84,8 +90,8 @@ after it is compressed."
 position INDEX to LIMIT."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
-  (let ((length (parse-uint32-carefully buffer index limit)))
-    (check-type length vector-index)
+  (let ((length (varint:parse-uint64-carefully buffer index limit)))
+    (check-type length snappy-index)
     length))
 
 (declaim (ftype (function (octet-vector vector-index octet-vector vector-index vector-index)
