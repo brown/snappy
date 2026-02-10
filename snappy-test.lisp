@@ -58,7 +58,8 @@
   (:import-from #:varint
                 #:data-exhausted
                 #:value-out-of-range)
-  (:export #:test-snappy))
+  (:export #:read-data-file
+           #:test-snappy))
 
 (in-package #:snappy-test)
 

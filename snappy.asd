@@ -53,11 +53,33 @@ for speed of compression and decompression."
   :author "Robert Brown <robert.brown@gmail.com>"
   :license "New BSD license.  See the copyright messages in individual files."
   :depends-on (acm-random
+               com.google.base
                hu.dwim.stefil
                nibbles
-               snappy)
+               random
+               snappy
+               varint)
   :components
   ((:file "snappy-test")))
 
 (defmethod perform ((operation test-op) (component (eql (find-system 'snappy/test))))
   (symbol-call 'snappy-test 'test-snappy))
+
+(defsystem snappy/benchmark
+  :name "Snappy benchmark"
+  :description "Benchmark code for package SNAPPY."
+  :version "0.3"
+  :author "Robert Brown <robert.brown@gmail.com>"
+  :license "New BSD license.  See the copyright messages in individual files."
+  :depends-on (acm-random
+               cl-cpus
+               com.google.base
+               random
+               snappy
+               snappy/test)
+  :components
+  ((:file "benchmark")
+   (:file "snappy-benchmark" :depends-on ("benchmark"))))
+
+(defmethod perform ((operation test-op) (component (eql (find-system 'snappy/benchmark))))
+  (symbol-call 'snappy-benchmark 'benchmark-snappy))
