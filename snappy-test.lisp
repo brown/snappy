@@ -52,11 +52,13 @@
                 #:ub64ref/le)
   (:import-from #:random
                 #:next-uint32
+                #:next-uint8
                 #:one-in
                 #:skewed-uint32
                 #:uniform-uint32)
   (:import-from #:varint
                 #:data-exhausted
+                #:encode-uint32-carefully
                 #:value-out-of-range)
   (:export #:read-data-file
            #:test-snappy))
@@ -338,6 +340,65 @@ that the compressed copy produces OCTETS when uncompressed."
          (want (concatenate 'string "pqrs" dots "pqrs.")))
     (is (string= got want))))
 
+(deftest decode-length-offset ()
+  (let ((prefix (string-to-utf8-octets "abcdefghijklmnopqr"))
+        (suffix (string-to-utf8-octets "ABCDEFGHIJKLMNOPQR"))
+        (sentinal-base #xa0)
+        (sentinal-length 37)
+        (input (make-octet-vector 128))
+        (got (make-octet-vector 128))
+        (want (make-octet-vector 128)))
+    (loop for length from 1 upto 18 do
+      (loop for offset from 1 upto 18 do
+        (loop for suffix-length upto 18 do
+          (let* ((total-length (+ (length prefix) length suffix-length))
+                 (input-index (encode-uint32-carefully input 0 (length input) total-length)))
+            (setf (aref input input-index) (+ snappy::+literal+ (* 4 (1- (length prefix)))))
+            (incf input-index)
+            (replace input prefix :start1 input-index)
+            (incf input-index (length prefix))
+            (setf (aref input input-index) (+ snappy::+copy-2-byte-offset+ (* 4 (1- length))))
+            (incf input-index)
+            (setf (aref input input-index) offset)
+            (incf input-index)
+            (setf (aref input input-index) #x00)
+            (incf input-index)
+            (when (plusp suffix-length)
+              (setf (aref input input-index) (+ snappy::+literal+ (* 4 (1- suffix-length))))
+              (incf input-index)
+              (replace input suffix :start1 input-index :end2 suffix-length)
+              (incf input-index suffix-length))
+
+            ;; Sentinal octets do not occur in the data to be uncompressed.
+            (loop for i below input-index do
+              (is (not (<= sentinal-base (aref input i) (1- (+ sentinal-base sentinal-length))))))
+
+            ;; Write sentinal octets to the entire got buffer.
+            (loop for i below (length got) do
+              (setf (aref got i) (+ sentinal-base (mod i sentinal-length))))
+
+            (let ((got-length (snappy::raw-uncompress input 0 input-index got 0 (length got))))
+              ;; No octets outside the uncompressed data were modified.
+              (loop for i from total-length below (length got) do
+                (is (= (aref got i) (+ sentinal-base (mod i sentinal-length)))))
+
+              (let ((want-index 0))
+                (replace want prefix)
+                (incf want-index (length prefix))
+                (loop repeat length do
+                  (setf (aref want want-index) (aref want (- want-index offset)))
+                  (incf want-index))
+                (replace want suffix :start1 want-index :end2 suffix-length)
+                (incf want-index suffix-length)
+                ;; Sentinal octets to not occur in the wanted data.
+                (loop for i below want-index do
+                  (is (not (<= sentinal-base
+                               (aref want i)
+                               (1- (+ sentinal-base sentinal-length))))))
+
+                ;; Uncompressed data must match what we expect.
+                (is (not (mismatch got want :test #'= :end1 got-length :end2 want-index)))))))))))
+
 (defun read-data-file (file-name &optional limit)
   (let ((data-pathname
           (asdf/system:system-relative-pathname 'snappy
@@ -361,8 +422,23 @@ that the compressed copy produces OCTETS when uncompressed."
         (golden-compressed (read-data-file "Isaac.Newton-Opticks.txt.rawsnappy")))
     (multiple-value-bind (compressed compressed-length)
         (compress golden 0 (length golden))
-        (declare (ignore compressed-length))
+      (declare (ignore compressed-length))
       (is (not (mismatch compressed golden-compressed :test #'=))))))
+
+(deftest encode-noise-then-repeats ()
+  "Compresses data for which the first half is very incompressible and the second half is very
+compressible. The length of the compressed data should be closer to 50% of the original length than
+100%."
+  (loop for length in (list (* 256 1024) (* 2048 1024)) do
+    (let ((octets (make-octet-vector length))
+          (random (make-instance 'acm-random :seed 1))
+          (middle (floor length 2)))
+      (loop for i below middle do (setf (aref octets i) (next-uint8 random)))
+      (loop for i from middle below length do (setf (aref octets i) (ldb (byte 8 8) (- i middle))))
+      (multiple-value-bind (compressed compressed-length)
+          (compress octets 0 (length octets))
+        (declare (ignore compressed))
+        (is (< compressed-length (floor (* 3 length) 4)))))))
 
 (deftest emit-literal ()
   (let ((test-cases '((1 (#x00))
