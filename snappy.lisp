@@ -38,11 +38,19 @@
   "Integer that can be used as a subscript for accessing a Snappy data vector."
  `(integer 0 #.+maximum-snappy-index+))
 
+(defconst +minimum-hash-bits+ 8)
+(defconst +minimum-hash-table-size+ (expt 2 +minimum-hash-bits+))
+
 (defconst +maximum-hash-bits+ 14)
 (defconst +maximum-hash-table-size+ (expt 2 +maximum-hash-bits+))
 
-(deftype hash-result () `(unsigned-byte ,+maximum-hash-bits+))
 (deftype table-size () `(integer 0 ,+maximum-hash-table-size+))
+
+(defconst +minimum-hash-shift+ (- 32 +maximum-hash-bits+))
+(defconst +maximum-hash-shift+ (- 32 +minimum-hash-bits+))
+
+(deftype hash-shift () `(integer ,+minimum-hash-shift+ ,+maximum-hash-shift+))
+(deftype hash-result () `(unsigned-byte ,+maximum-hash-bits+))
 
 (defconst +literal+ 0)
 
@@ -56,21 +64,16 @@
   (check-type variable symbol)
   `(prog1 ,variable (incf ,variable)))
 
-(declaim (ftype (function (octet-vector vector-index hash-result)
+(declaim (ftype (function (octet-vector vector-index hash-shift)
                           (values hash-result &optional))
                 hash)
          (inline hash))
 
-(defun hash (buffer index mask)
+(defun hash (buffer index shift)
   (declare (type octet-vector buffer)
            (type vector-index index)
-           (type hash-result mask))
-  (logand (logxor (ash (logxor (ash (aref buffer (+ index 3)) 6)
-                               (ash (aref buffer (+ index 2)) 5)
-                               (aref buffer (+ index 1)))
-                       5)
-                  (aref buffer index))
-          mask))
+           (type hash-shift shift))
+  (ash (logand (* (ub32ref/le buffer index) #x1e35a7bd) #xffffffff) (- shift)))
 
 (declaim (ftype (function (vector-index) (values vector-index &optional))
                 maximum-compressed-length))
@@ -90,7 +93,7 @@ after it is compressed."
 position INDEX to LIMIT."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
-  (let ((length (varint:parse-uint64-carefully buffer index limit)))
+  (let ((length (parse-uint64-carefully buffer index limit)))
     (check-type length snappy-index)
     length))
 
@@ -180,20 +183,22 @@ position INDEX to LIMIT."
            (type vector-index in in-limit out out-limit))
   ;; (assert (>= +maximum-hash-table-size+ 256))
   (let* ((in-length (- in-limit in))
-         (table-size (loop for size of-type table-size = 256 then (* 2 size)
+         (shift +maximum-hash-shift+)
+         (table-size (loop for size of-type table-size = +minimum-hash-table-size+ then (* 2 size)
                            while (and (< size +maximum-hash-table-size+)
                                       (< size in-length))
+                           do (decf shift)
                            finally (return size)))
-         (mask (1- table-size))
          (table (make-array table-size
                             :element-type 'vector-index :initial-element +maximum-vector-index+))
          (next-emit in)
          (safe-in-limit (- in-limit 13))
          (initial-out out))
+    (declare (type hash-shift shift))
     (setf out (encode-uint32-carefully output-buffer out out-limit in-length))
     (do ()
         ((>= in safe-in-limit))
-      (let* ((k (hash input-buffer in mask))
+      (let* ((k (hash input-buffer in shift))
              (candidate (aref table k)))
         (setf (aref table k) in)
 
@@ -244,8 +249,7 @@ position INDEX to LIMIT."
                 (setf match-count (- in base))
                 (loop while (and (< in safe-in-limit)
                                  (= (aref input-buffer in)
-                                    (aref input-buffer
-                                          (+ candidate match-count))))
+                                    (aref input-buffer (+ candidate match-count))))
                       do (incf in)
                          (incf match-count))))
           (let ((offset (- base candidate)))
@@ -261,7 +265,7 @@ position INDEX to LIMIT."
             (setf out (emit-copy output-buffer out offset match-count))
             (when (>= match-count 16)
               (loop for i from (- match-count 16) below match-count by 4 do
-                (setf (aref table (hash input-buffer (+ base i) mask)) (+ base i))))
+                (setf (aref table (hash input-buffer (+ base i) shift)) (+ base i))))
             (setf next-emit in))))
      CONTINUE)
 
