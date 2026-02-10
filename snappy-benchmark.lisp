@@ -60,11 +60,10 @@
 (defun benchmark-compress (bench octets)
   (let ((size (length octets)))
     (set-data-size bench size)
-    (let* ((max-compressed-length (maximum-compressed-length size))
-           (compressed (make-octet-vector max-compressed-length)))
+    (let ((compressed (make-octet-vector (maximum-compressed-length size))))
       (reset-timer bench)
       (benchmark-loop (bench)
-        (snappy::raw-compress octets 0 size compressed 0 max-compressed-length)))))
+        (snappy::raw-compress octets 0 size compressed 0)))))
 
 (defun read-file (file-name)
   (with-open-file (stream file-name :element-type 'octet :if-does-not-exist :error)

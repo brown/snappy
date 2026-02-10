@@ -58,8 +58,6 @@
 (defconst +copy-2-byte-offset+ 2)
 (defconst +copy-4-byte-offset+ 3)
 
-(defconst +vector-index-bits+ (integer-length +maximum-vector-index+))
-
 (defmacro postincf (variable)
   (check-type variable symbol)
   `(prog1 ,variable (incf ,variable)))
@@ -174,13 +172,13 @@ position INDEX to LIMIT."
   (emit-copy-less-than-64 output-buffer out offset length))
 
 (declaim (ftype (function (octet-vector vector-index vector-index
-                           octet-vector vector-index vector-index)
+                           octet-vector vector-index)
                           (values vector-index &optional))
                 raw-compress))
 
-(defun raw-compress (input-buffer in in-limit output-buffer out out-limit)
+(defun raw-compress (input-buffer in in-limit output-buffer out)
   (declare (type octet-vector input-buffer output-buffer)
-           (type vector-index in in-limit out out-limit))
+           (type vector-index in in-limit out))
   ;; (assert (>= +maximum-hash-table-size+ 256))
   (let* ((in-length (- in-limit in))
          (shift +maximum-hash-shift+)
@@ -195,7 +193,7 @@ position INDEX to LIMIT."
          (safe-in-limit (- in-limit 13))
          (initial-out out))
     (declare (type hash-shift shift))
-    (setf out (encode-uint32-carefully output-buffer out out-limit in-length))
+    (setf out (encode-uint32 output-buffer out in-length))
     (do ()
         ((>= in safe-in-limit))
       (let* ((k (hash input-buffer in shift))
@@ -286,11 +284,8 @@ type (UNSIGNED-BYTE 8) holding the compressed data and an integer indicating
 the number of compressed octets in the vector."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
-  (let* ((length (- limit index))
-         (max-compressed-length (maximum-compressed-length length))
-         (compressed (make-octet-vector max-compressed-length))
-         (compressed-length (raw-compress buffer index limit
-                                          compressed 0 max-compressed-length)))
+  (let* ((compressed (make-octet-vector (maximum-compressed-length (- limit index))))
+         (compressed-length (raw-compress buffer index limit compressed 0)))
     (values compressed compressed-length)))
 
 (declaim (ftype (function (octet-vector vector-index vector-index
@@ -345,9 +340,7 @@ the number of compressed octets in the vector."
                     (incf in)
                     (setf (ldb (byte 8 16) offset) (aref input-buffer in))
                     (incf in)
-                    (setf (ldb (byte #.(- +vector-index-bits+ 24) 24)
-                               offset)
-                          (aref input-buffer in))
+                    (setf (ldb (byte 8 24) offset) (aref input-buffer in))
                     (incf in)))
                  (values offset length))))
         (loop while (< in in-limit) do
