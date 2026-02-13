@@ -532,6 +532,17 @@ that the compressed copy produces OCTETS when uncompressed."
       (declare (ignore compressed-length))
       (is (not (mismatch compressed golden-compressed :test #'=))))))
 
+(deftest benchmark-files-round-trip ()
+  (let ((benchmark-files '("alice29.txt" "asyoulik.txt" "fireworks.jpeg" "geo.protodata" "html"
+                           "html_x_4" "kppkn.gtb" "lcet10.txt" "paper-100k.pdf" "plrabn12.txt"
+                           "urls.10K")))
+    (loop for file-name in benchmark-files do
+      (let ((input (read-data-file (concatenate 'string "bench/" file-name))))
+        (multiple-value-bind (compressed compressed-length)
+            (compress input 0 (length input))
+          (let ((uncompressed (uncompress compressed 0 compressed-length)))
+            (is (not (mismatch uncompressed input :test #'=)))))))))
+
 (deftest encode-noise-then-repeats ()
   "Compresses data for which the first half is very incompressible and the second half is very
 compressible. The length of the compressed data should be closer to 50% of the original length than

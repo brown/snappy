@@ -32,6 +32,8 @@
 
 (in-package #:snappy)
 
+(defconst +maximum-block-size+ 65536)
+
 (defconst +maximum-snappy-index+ (1- (expt 2 32)) "Largest valid index into Snappy data.")
 
 (deftype snappy-index ()
@@ -194,7 +196,6 @@ position INDEX to LIMIT."
          (safe-in-limit (- in-limit 13))
          (initial-out out))
     (declare (type hash-shift shift))
-    (setf out (encode-uint32 output-buffer out in-length))
     (do ()
         ((>= in safe-in-limit))
       (let* ((k (hash input-buffer in shift))
@@ -285,9 +286,22 @@ type (UNSIGNED-BYTE 8) holding the compressed data and an integer indicating
 the number of compressed octets in the vector."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
-  (let* ((compressed (make-octet-vector (maximum-compressed-length (- limit index))))
-         (compressed-length (raw-compress buffer index limit compressed 0)))
-    (values compressed compressed-length)))
+  (let* ((input-length (- limit index))
+         (output-length (maximum-compressed-length input-length)))
+    (when (> input-length +maximum-snappy-index+)
+      (error "data size too large"))
+    (when (> output-length +maximum-snappy-index+)
+      (error "compressed size too large"))
+    (let* ((compressed (make-octet-vector output-length))
+           (out (encode-uint32 compressed 0 input-length)))
+      (loop while (plusp input-length) do
+        (let* ((amount (min input-length +maximum-block-size+))
+               (limit (+ index amount))
+               (compressed-length (raw-compress buffer index limit compressed out)))
+          (incf index amount)
+          (decf input-length amount)
+          (incf out compressed-length)))
+      (values compressed out))))
 
 (declaim (ftype (function (octet-vector vector-index vector-index
                            octet-vector vector-index vector-index)
