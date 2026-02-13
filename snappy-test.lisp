@@ -59,6 +59,7 @@
   (:import-from #:varint
                 #:data-exhausted
                 #:encode-uint32-carefully
+                #:parse-uint32-carefully
                 #:value-out-of-range)
   (:export #:read-data-file
            #:test-snappy))
@@ -309,31 +310,134 @@ that the compressed copy produces OCTETS when uncompressed."
     (let ((repeated-b (make-string count :initial-element #\b)))
       (verify-string (concatenate 'string "aaaa" repeated-b "aaaabbbb")))))
 
-(deftest invalid-varint ()
+(deftest uncompressed-length-varint ()
   ;; Varint parsing should signal either that the final octet has the continuation bit set or that
   ;; the data buffer is exhausted.
-  (signals data-exhausted
-    (uncompressed-length (make-octet-vector 1 :initial-contents '(#xff)) 0 1))
+  (let ((octets (make-octet-vector 1 :initial-contents '(#xff))))
+    (signals data-exhausted (uncompressed-length octets 0 1)))
   ;; Varint value overflows a uint64.
-  (let ((octets '(#xff #xff #xff #xff #xff #xff #xff #xff #xff #xff #x00)))
-    (signals value-out-of-range
-      (uncompressed-length
-       (make-octet-vector (length octets) :initial-contents octets) 0 (length octets))))
+  (let* ((input '(#xff #xff #xff #xff #xff #xff #xff #xff #xff #xff #x00))
+         (octets (make-octet-vector (length input) :initial-contents input)))
+    (signals value-out-of-range (uncompressed-length octets 0 (length octets))))
   ;; Snappy documentation says the maximum uncompressed buffer size is 2^32 - 1.
   ;; https://github.com/google/snappy/blob/master/format_description.txt
-  (signals error
-    (uncompressed-length (make-octet-vector 5 :initial-contents '(#x80 #x80 #x80 #x80 #x10)) 0 5)))
+  (let ((octets (make-octet-vector 5 :initial-contents '(#x80 #x80 #x80 #x80 #x10))))
+    (signals error (uncompressed-length octets 0 5))))
+
+(deftest decode ()
+  (let ((test-cases
+          `(;; len=0; valid input
+            ((#x00) () nil)
+            ;; len=3; literal, 0-byte length; length=3; valid input
+            ((#x03 #x08 #xff #xff #xff) (#xff #xff #xff) nil)
+            ;; len=2; literal, 0-byte length; length=3; not enough dst bytes
+            ((#x02 #x08 #xff #xff #xff) () error)
+            ;; len=3; literal, 0-byte length; length=3; not enough src bytes
+            ((#x03 #x08 #xff #xff) () error)
+            ;; len=40; literal, 0-byte length; length=40; valid input
+	    ((#x28 #x9c ,@(loop for i below 40 collect i)) ,(loop for i below 40 collect i) nil)
+            ;; len=1; literal, 1-byte length; not enough length bytes
+            ((#x01 #xf0) () error)
+            ;; len=3; literal, 1-byte length; length=3; valid input
+            ((#x03 #xf0 #x02 #xff #xff #xff) (#xff #xff #xff) nil)
+            ;; len=1; literal, 2-byte length; not enough length bytes
+	    ((#x01 #xf4 #x00) () error)
+            ;; len=3; literal, 2-byte length; length=3; valid input
+            ((#x03 #xf4 #x02 #x00 #xff #xff #xff) (#xff #xff #xff) nil)
+            ;; len=1; literal, 3-byte length; not enough length bytes
+	    ((#x01 #xf8 #x00 #x00) () error)
+            ;; len=3; literal, 3-byte length; length=3; valid input
+	    ((#x03 #xf8 #x02 #x00 #x00 #xff #xff #xff) (#xff #xff #xff) nil)
+            ;; len=1; literal, 4-byte length; not enough length bytes
+	    ((#x01 #xfc #x00 #x00 #x00) () error)
+            ;; len=1; literal, 4-byte length; length=3; not enough dst bytes
+            ((#x01 #xfc #x02 #x00 #x00 #x00 #xff #xff #xff) () error)
+            ;; len=4; literal, 4-byte length; length=3; not enough src bytes
+            ((#x04 #xfc #x02 #x00 #x00 #x00 #xff) () error)
+            ;; len=3; literal, 4-byte length; length=3; valid input
+	    ((#x03 #xfc #x02 #x00 #x00 #x00 #xff #xff #xff) (#xff #xff #xff) nil)
+            ;; len=4; copy1, 1 extra length|offset byte; not enough extra bytes
+	    ((#x04 #x01) () error)
+            ;; len=4; copy2, 2 extra length|offset bytes; not enough extra bytes
+            ((#x04 #x02 #x00) () error)
+            ;; len=4; copy4, 4 extra length|offset bytes; not enough extra bytes
+            ((#x04 #x03 #x00 #x00 #x00) () error)
+            ;; len=4; literal (4 bytes "abcd"); valid input
+	    ((#x04 #x0c #\a #\b #\c #\d) (#\a #\b #\c #\d) nil)
+            ;; len=13; literal (4 bytes "abcd"); copy1; length=9 offset=4; valid input
+	    ((#x0d #x0c #\a #\b #\c #\d #x15 #x04)
+             (#\a #\b #\c #\d #\a #\b #\c #\d #\a #\b #\c #\d #\a)
+             nil)
+            ;; len=8; literal (4 bytes "abcd"); copy1; length=4 offset=4; valid input
+	    ((#x08 #x0c #\a #\b #\c #\d #x01 #x04) (#\a #\b #\c #\d #\a #\b #\c #\d) nil)
+            ;; len=8; literal (4 bytes "abcd"); copy1; length=4 offset=2; valid input
+	    ((#x08 #x0c #\a #\b #\c #\d #x01 #x02) (#\a #\b #\c #\d #\c #\d #\c #\d) nil)
+            ;; len=8; literal (4 bytes "abcd"); copy1; length=4 offset=1; valid input
+	    ((#x08 #x0c #\a #\b #\c #\d #x01 #x01) (#\a #\b #\c #\d #\d #\d #\d #\d) nil)
+            ;; len=8; literal (4 bytes "abcd"); copy1; length=4 offset=0; zero offset
+	    ((#x08 #x0c #\a #\b #\c #\d #x01 #x00) () error)
+            ;; len=9; literal (4 bytes "abcd"); copy1; length=4 offset=4; len mismatch
+            ((#x09 #x0c #\a #\b #\c #\d #x01 #x04) () error)
+            ;; len=8; literal (4 bytes "abcd"); copy1; length=4 offset=5; offset too large
+	    ((#x08 #x0 #\c #\a #\b #\c #\d #x01 #x05) () error)
+            ;; len=7; literal (4 bytes "abcd"); copy1; length=4 offset=4; length too large
+            ((#x07 #x0c #\a #\b #\c #\d #x01 #x04) () error)
+            ;; len=6; literal (4 bytes "abcd"); copy2; length=2 offset=3; valid input
+	    ((#x06 #x0c #\a #\b #\c #\d #x06 #x03 #x00) (#\a #\b #\c #\d #\b #\c) nil)
+            ;; len=6; literal (4 bytes "abcd"); copy4; length=2 offset=3; valid input
+	    ((#x06 #x0c #\a #\b #\c #\d #x07 #x03 #x00 #x00 #x00) (#\a #\b #\c #\d #\b #\c) nil)
+            ;; len=0; copy4, 4 length/offset bytes with MSB 0x93
+	    ((#x00 #xfc #\0 #\0 #\0 #x93) nil error)))
+        (sentinal-base #xa0)
+        (sentinal-length 37)
+        (uncompressed (make-octet-vector 100)))
+    (loop for (raw-input raw-want error) in test-cases do
+      (let ((input (loop for i in raw-input collect (if (numberp i) i (char-code i))))
+            (want (loop for i in raw-want collect (if (numberp i) i (char-code i)))))
+
+        ;; Sentinal octets do not occur in the data to be uncompressed.
+        (loop for octet in input do
+          (assert (not (<= sentinal-base octet (1- (+ sentinal-base sentinal-length))))))
+
+        (let ((compressed (make-octet-vector (length input) :initial-contents input)))
+          (multiple-value-bind (length in)
+              (parse-uint32-carefully compressed 0 (length compressed))
+
+            ;; Uncompressed data will fit in the buffer.
+            (assert (<= 0 length (1- (length uncompressed))))
+
+            ;; Write sentinal octets to the entire buffer.
+            (loop for i below (length uncompressed) do
+              (setf (aref uncompressed i) (+ sentinal-base (mod i sentinal-length))))
+
+            (ecase error
+              ((error)
+               (signals error
+                 (snappy::raw-uncompress compressed in (length compressed)
+                                         uncompressed 0 length)))
+
+              ((nil foobar)
+               (let ((uncompressed-length
+                       (snappy::raw-uncompress compressed in (length compressed)
+                                               uncompressed 0 length))
+                     (want-octets (make-octet-vector (length want) :initial-contents want)))
+                 (is (not (mismatch uncompressed want-octets :end1 uncompressed-length))))))
+
+            ;; No octets outside the uncompressed data were modified.
+            (loop for i upfrom length below (length uncompressed) do
+              (is (= (aref uncompressed i) (+ sentinal-base (mod i sentinal-length)))))))))))
 
 (deftest decode-copy-4 ()
   (let* ((dots (make-string 65536 :initial-element #\.))
-         (octets `(;; decoded length is 65545
-                   #x89 #x80 #x04
-                   ;; 4-byte literal "pqrs"
-                   #x0c ,(char-code #\p) ,(char-code #\q) ,(char-code #\r) ,(char-code #\s)
-                   ;; 65536-byte literal dots
-                   #xf4 #xff #xff ,@(loop for ch across dots :collect (char-code ch))
-                   ;; copy 4 with length 5 and offset 65540
-                   #x13 #x04 #x00 #x01 #x00))
+         (input `(;; decoded length is 65545
+                  #x89 #x80 #x04
+                  ;; 4-byte literal "pqrs"
+                  #x0c #\p #\q #\r #\s
+                  ;; 65536-byte literal dots
+                  #xf4 #xff #xff ,@(loop for ch across dots collect ch)
+                  ;; copy 4 with length 5 and offset 65540
+                  #x13 #x04 #x00 #x01 #x00))
+         (octets (loop for i in input collect (if (numberp i) i (char-code i))))
          (compressed (make-octet-vector (length octets) :initial-contents octets))
          (uncompressed (uncompress compressed 0 (length compressed)))
          (got (utf8-octets-to-string uncompressed))
@@ -352,7 +456,8 @@ that the compressed copy produces OCTETS when uncompressed."
       (loop for offset from 1 upto 18 do
         (loop for suffix-length upto 18 do
           (let* ((total-length (+ (length prefix) length suffix-length))
-                 (input-index (encode-uint32-carefully input 0 (length input) total-length)))
+                 (in (encode-uint32-carefully input 0 (length input) total-length))
+                 (input-index in))
             (setf (aref input input-index) (+ snappy::+literal+ (* 4 (1- (length prefix)))))
             (incf input-index)
             (replace input prefix :start1 input-index)
@@ -371,13 +476,15 @@ that the compressed copy produces OCTETS when uncompressed."
 
             ;; Sentinal octets do not occur in the data to be uncompressed.
             (loop for i below input-index do
-              (is (not (<= sentinal-base (aref input i) (1- (+ sentinal-base sentinal-length))))))
+              (assert (not (<= sentinal-base
+                               (aref input i)
+                               (1- (+ sentinal-base sentinal-length))))))
 
             ;; Write sentinal octets to the entire got buffer.
             (loop for i below (length got) do
               (setf (aref got i) (+ sentinal-base (mod i sentinal-length))))
 
-            (let ((got-length (snappy::raw-uncompress input 0 input-index got 0 (length got))))
+            (let ((got-length (snappy::raw-uncompress input in input-index got 0 total-length)))
               ;; No octets outside the uncompressed data were modified.
               (loop for i from total-length below (length got) do
                 (is (= (aref got i) (+ sentinal-base (mod i sentinal-length)))))
@@ -392,9 +499,9 @@ that the compressed copy produces OCTETS when uncompressed."
                 (incf want-index suffix-length)
                 ;; Sentinal octets to not occur in the wanted data.
                 (loop for i below want-index do
-                  (is (not (<= sentinal-base
-                               (aref want i)
-                               (1- (+ sentinal-base sentinal-length))))))
+                  (assert (not (<= sentinal-base
+                                   (aref want i)
+                                   (1- (+ sentinal-base sentinal-length))))))
 
                 ;; Uncompressed data must match what we expect.
                 (is (not (mismatch got want :test #'= :end1 got-length :end2 want-index)))))))))))

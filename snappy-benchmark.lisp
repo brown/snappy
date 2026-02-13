@@ -43,6 +43,7 @@
                 #:octet)
   (:import-from #:random #:next-uint8)
   (:import-from #:snappy-test #:read-data-file)
+  (:import-from #:varint #:parse-uint32-carefully)
   (:export #:benchmark-snappy))
 
 (in-package #:snappy-benchmark)
@@ -53,9 +54,12 @@
     (set-data-size bench size)
     (multiple-value-bind (compressed compressed-length)
         (compress octets 0 (length octets))
-      (reset-timer bench)
-      (benchmark-loop (bench)
-        (snappy::raw-uncompress compressed 0 compressed-length octets 0 size)))))
+      (multiple-value-bind (length in)
+          (parse-uint32-carefully compressed 0 compressed-length)
+        (declare (ignore length))
+        (reset-timer bench)
+        (benchmark-loop (bench)
+          (snappy::raw-uncompress compressed in compressed-length octets 0 size))))))
 
 (defun benchmark-compress (bench octets)
   (let ((size (length octets)))
