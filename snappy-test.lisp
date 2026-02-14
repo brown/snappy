@@ -523,14 +523,12 @@ that the compressed copy produces OCTETS when uncompressed."
     (let ((uncompressed (uncompress golden-compressed 0 (length golden-compressed))))
       (is (not (mismatch uncompressed golden :test #'=))))))
 
-#+nil                                   ; currently fails!
 (deftest compress-golden ()
   (let ((golden (read-data-file "Isaac.Newton-Opticks.txt"))
         (golden-compressed (read-data-file "Isaac.Newton-Opticks.txt.rawsnappy")))
     (multiple-value-bind (compressed compressed-length)
         (compress golden 0 (length golden))
-      (declare (ignore compressed-length))
-      (is (not (mismatch compressed golden-compressed :test #'=))))))
+      (is (not (mismatch compressed golden-compressed :end1 compressed-length :test #'=))))))
 
 (deftest benchmark-files-round-trip ()
   (let ((benchmark-files '("alice29.txt" "asyoulik.txt" "fireworks.jpeg" "geo.protodata" "html"
@@ -542,6 +540,17 @@ that the compressed copy produces OCTETS when uncompressed."
             (compress input 0 (length input))
           (let ((uncompressed (uncompress compressed 0 compressed-length)))
             (is (not (mismatch uncompressed input :test #'=)))))))))
+
+(deftest benchmark-files-compress-golden ()
+  (let ((benchmark-files '("alice29.txt" "asyoulik.txt" "fireworks.jpeg" "geo.protodata" "html"
+                           "html_x_4" "kppkn.gtb" "lcet10.txt" "paper-100k.pdf" "plrabn12.txt"
+                           "urls.10K")))
+    (loop for file-name in benchmark-files do
+      (let ((input (read-data-file (concatenate 'string "bench/" file-name)))
+            (golden-compressed (read-data-file (concatenate 'string "compressed/" file-name))))
+        (multiple-value-bind (compressed compressed-length)
+            (compress input 0 (length input))
+          (is (not (mismatch compressed golden-compressed :end1 compressed-length :test #'=))))))))
 
 (deftest encode-noise-then-repeats ()
   "Compresses data for which the first half is very incompressible and the second half is very
@@ -556,7 +565,7 @@ compressible. The length of the compressed data should be closer to 50% of the o
       (multiple-value-bind (compressed compressed-length)
           (compress octets 0 (length octets))
         (declare (ignore compressed))
-        (is (< compressed-length (floor (* 3 length) 4)))))))
+        (is (< compressed-length (* 3/4 length)))))))
 
 (deftest emit-literal ()
   (let ((test-cases '((1 (#x00))

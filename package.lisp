@@ -41,11 +41,13 @@ designed for speed of compression and decompression.")
                 #:+maximum-vector-index+
                 #:octet-vector
                 #:*optimize-default*
+                #:uint16
                 #:uint32
                 #:vector-index)
   (:import-from #:nibbles
                 #:ub16ref/le
-                #:ub32ref/le)
+                #:ub32ref/le
+                #:ub64ref/le)
   (:import-from #:varint
                 #:encode-uint32
                 #:parse-uint32-carefully

@@ -33,6 +33,8 @@
 (in-package #:snappy)
 
 (defconst +maximum-block-size+ 65536)
+(defconst +input-margin+ (- 16 1))
+(defconst +minimum-non-literal-block-size+ (+ 1 1 +input-margin+))
 
 (defconst +maximum-snappy-index+ (1- (expt 2 32)) "Largest valid index into Snappy data.")
 
@@ -76,16 +78,13 @@
   (check-type variable symbol)
   `(prog1 ,variable (incf ,variable)))
 
-(declaim (ftype (function (octet-vector vector-index hash-shift)
-                          (values hash-result &optional))
-                hash)
+(declaim (ftype (function (uint32 hash-shift) (values hash-result &optional)) hash)
          (inline hash))
 
-(defun hash (buffer index shift)
-  (declare (type octet-vector buffer)
-           (type vector-index index)
+(defun hash (x shift)
+  (declare (type uint32 x)
            (type hash-shift shift))
-  (ash (logand (* (ub32ref/le buffer index) #x1e35a7bd) #xffffffff) (- shift)))
+  (ash (logand (* x #x1e35a7bd) #xffffffff) (- shift)))
 
 (declaim (ftype (function (vector-index) (values vector-index &optional))
                 maximum-compressed-length))
@@ -96,8 +95,7 @@ after it is compressed."
   (declare (type vector-index uncompressed-length))
   (+ 32 uncompressed-length (floor uncompressed-length 6)))
 
-(declaim (ftype (function (octet-vector vector-index vector-index)
-                          (values snappy-index vector-index &optional))
+(declaim (ftype (function (octet-vector vector-index vector-index) (values snappy-index &optional))
                 uncompressed-length))
 
 (defun uncompressed-length (buffer index limit)
@@ -107,8 +105,9 @@ position INDEX to LIMIT."
            (type vector-index index limit))
   (multiple-value-bind (length in)
       (parse-uint64-carefully buffer index limit)
+    (declare (ignore in))
     (check-type length snappy-index)
-    (values length in)))
+    length))
 
 (declaim (ftype (function (octet-vector vector-index octet-vector vector-index literal-length)
                           (values vector-index &optional))
@@ -180,94 +179,64 @@ position INDEX to LIMIT."
   (let* ((in-length (- in-limit in))
          (shift +maximum-hash-shift+)
          (table-size (loop for size of-type table-size = +minimum-hash-table-size+ then (* 2 size)
-                           while (and (< size +maximum-hash-table-size+)
-                                      (< size in-length))
+                           while (and (< size +maximum-hash-table-size+) (< size in-length))
                            do (decf shift)
                            finally (return size)))
-         (table (make-array table-size
-                            :element-type 'vector-index :initial-element +maximum-vector-index+))
-         (next-emit in)
-         (safe-in-limit (- in-limit 13))
-         (initial-out out))
+         (table (make-array table-size :element-type 'uint16 :initial-element 0))
+         (orig-in in)
+         (next-emit (postincf in))
+         (next-hash (hash (ub32ref/le input-buffer in) shift))
+         (safe-in-limit (- in-limit +input-margin+)))
     (declare (type hash-shift shift))
-    (do ()
-        ((>= in safe-in-limit))
-      (let* ((k (hash input-buffer in shift))
-             (candidate (aref table k)))
-        (setf (aref table k) in)
 
-        (when (= candidate +maximum-vector-index+)
-          ;; No candidate match, so continue.
-          (incf in)
-          (go continue))
+    (block compress-loop
+      (loop
+        (let ((skip 32)
+              (next-in in)
+              (candidate 0))
+          (declare (type vector-index skip))
+          (loop
+            (setf in next-in)
+            (let ((bytes-between-hash-lookups (ash skip -5)))
+              (declare (type uint16 bytes-between-hash-lookups))
+              (setf next-in (+ in bytes-between-hash-lookups))
+              (incf skip bytes-between-hash-lookups)
+              (when (> next-in safe-in-limit)
+                (return-from compress-loop))
+              (setf candidate (+ orig-in (aref table next-hash))
+                    (aref table next-hash) (- in orig-in)
+                    next-hash (hash (ub32ref/le input-buffer next-in) shift))
+              (when (= (ub32ref/le input-buffer in) (ub32ref/le input-buffer candidate))
+                (return))))
 
-        ;; Check for a match of at least 4 octets.
-        (when (or (/= (aref input-buffer candidate)
-                      (aref input-buffer in))
-                  (/= (aref input-buffer (1+ candidate))
-                      (aref input-buffer (1+ in)))
-                  (/= (aref input-buffer (+ candidate 2))
-                      (aref input-buffer (+ in 2)))
-                  (/= (aref input-buffer (+ candidate 3))
-                      (aref input-buffer (+ in 3))))
-          ;; No match, so continue.
-          (incf in)
-          (go continue))
+          (setf out (emit-literal input-buffer next-emit output-buffer out (- in next-emit)))
 
-        ;; We have found a match of at least 4 characters.
-        (let ((base in)
-              (match-count 0))
-          (declare (type vector-index match-count))
-          (incf in 4)
-          ;;  Find out how long the match is.
-          (if (or (/= (aref input-buffer (+ candidate 4))
-                      (aref input-buffer (postincf in)))
-                  (/= (aref input-buffer (+ candidate 5))
-                      (aref input-buffer (postincf in)))
-                  (/= (aref input-buffer (+ candidate 6))
-                      (aref input-buffer (postincf in)))
-                  (/= (aref input-buffer (+ candidate 7))
-                      (aref input-buffer (postincf in)))
-                  (/= (aref input-buffer (+ candidate 8))
-                      (aref input-buffer (postincf in)))
-                  (/= (aref input-buffer (+ candidate 9))
-                      (aref input-buffer (postincf in)))
-                  (/= (aref input-buffer (+ candidate 10))
-                      (aref input-buffer (postincf in))))
-              (progn
-                ;; Short match
-                (decf in)
-                (setf match-count (- in base)))
-              (progn
-                ;; Longer match
-                (setf match-count (- in base))
-                (loop while (and (< in safe-in-limit)
-                                 (= (aref input-buffer in)
-                                    (aref input-buffer (+ candidate match-count))))
-                      do (incf in)
-                         (incf match-count))))
-          (let ((offset (- base candidate)))
-            (when (and (= match-count 4) (>= offset 65536))
-              ;; Encoding of copy operation takes 5 bytes, so do not bother
-              ;; with this match.
-              (setf in (1+ base))
-              (go continue))
-            (when (< next-emit base)
-              (setf out (emit-literal input-buffer next-emit
-                                      output-buffer out
-                                      (- base next-emit))))
-            (setf out (emit-copy output-buffer out offset match-count))
-            (when (>= match-count 16)
-              (loop for i from (- match-count 16) below match-count by 4 do
-                (setf (aref table (hash input-buffer (+ base i) shift)) (+ base i))))
-            (setf next-emit in))))
-     CONTINUE)
+          (loop
+            (let ((base in))
+              (incf in 4)
+              (loop for i upfrom (+ candidate 4)
+                    while (and (< in in-limit) (= (aref input-buffer i) (aref input-buffer in)))
+                    do (incf in))
+              (setf out (emit-copy output-buffer out (- base candidate) (- in base)))
+              (setf next-emit in)
+              (when (>= in safe-in-limit)
+                (return-from compress-loop))
+
+              (let* ((x (ub64ref/le input-buffer (1- in)))
+                     (previous-hash (hash (ldb (byte 32 0) x) shift)))
+                (setf (aref table previous-hash) (- in orig-in 1))
+                (let ((current-hash (hash (ldb (byte 32 8) x) shift)))
+                  (setf candidate (+ orig-in (aref table current-hash))
+                        (aref table current-hash) (- in orig-in))
+                  (when (/= (ldb (byte 32 8) x) (ub32ref/le input-buffer candidate))
+                    (setf next-hash (hash (ldb (byte 32 16) x) shift))
+                    (incf in)
+                    (return)))))))))
 
     (when (< next-emit in-limit)
-      (setf out (emit-literal input-buffer next-emit
-                              output-buffer out
-                              (- in-limit next-emit))))
-    (- out initial-out)))
+      (setf out (emit-literal input-buffer next-emit output-buffer out (- in-limit next-emit))))
+
+    out))
 
 (declaim (ftype (function (octet-vector vector-index vector-index)
                           (values octet-vector vector-index &optional))
@@ -290,11 +259,13 @@ the number of compressed octets in the vector."
            (out (encode-uint32 compressed 0 input-length)))
       (loop while (plusp input-length) do
         (let* ((amount (min input-length +maximum-block-size+))
-               (limit (+ index amount))
-               (compressed-length (raw-compress buffer index limit compressed out)))
+               (limit (+ index amount)))
+          (setf out
+                (if (< amount +minimum-non-literal-block-size+)
+                    (emit-literal buffer index compressed out amount)
+                    (raw-compress buffer index limit compressed out)))
           (incf index amount)
-          (decf input-length amount)
-          (incf out compressed-length)))
+          (decf input-length amount)))
       (values compressed out))))
 
 (declaim (ftype (function (octet-vector vector-index vector-index
@@ -391,12 +362,12 @@ the number of compressed octets in the vector."
 LIMIT.  Returns the uncompressed data as a vector of (UNSIGNED-BYTE 8)."
   (declare (type octet-vector buffer)
            (type vector-index index limit))
-  (multiple-value-bind (uncompressed-length in)
-      (uncompressed-length buffer index limit)
-    (let ((uncompressed (make-octet-vector uncompressed-length)))
-      (raw-uncompress buffer in limit uncompressed 0 uncompressed-length)
+  (multiple-value-bind (length in)
+      (parse-uint64-carefully buffer index limit)
+    (check-type length snappy-index)
+    (let ((uncompressed (make-octet-vector length)))
+      (raw-uncompress buffer in limit uncompressed 0 length)
       uncompressed)))
-
 
 
 ;; XXXX: Not yet used.  Create a lookup table for speeding decompression.
