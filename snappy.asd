@@ -34,7 +34,7 @@
   :long-description
 "An implementation of Google's Snappy compression algorithm, which is designed
 for speed of compression and decompression."
-  :version "0.3"
+  :version "0.4"
   :author "Robert Brown <robert.brown@gmail.com>"
   :license "New BSD license.  See the copyright messages in individual files."
   :defsystem-depends-on (com.google.base)
@@ -49,7 +49,7 @@ for speed of compression and decompression."
 (defsystem snappy/test
   :name "Snappy test"
   :description "Test code for package SNAPPY."
-  :version "0.3"
+  :version "0.4"
   :author "Robert Brown <robert.brown@gmail.com>"
   :license "New BSD license.  See the copyright messages in individual files."
   :depends-on (acm-random
@@ -68,7 +68,7 @@ for speed of compression and decompression."
 (defsystem snappy/benchmark
   :name "Snappy benchmark"
   :description "Benchmark code for package SNAPPY."
-  :version "0.3"
+  :version "0.4"
   :author "Robert Brown <robert.brown@gmail.com>"
   :license "New BSD license.  See the copyright messages in individual files."
   :depends-on (acm-random
