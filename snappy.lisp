@@ -58,7 +58,19 @@
 
 (defconst +copy-1-byte-offset+ 1)
 (defconst +copy-2-byte-offset+ 2)
-(defconst +copy-4-byte-offset+ 3)
+(defconst +copy-4-byte-offset+ 3)       ; unused by compression
+
+(deftype literal-length ()
+  "A Snappy literal chunk length value."
+ `(integer 1 #.+maximum-block-size+))
+
+(deftype copy-length ()
+  "A Snappy copy chunk length value."
+ `(integer 4 #.(1- +maximum-block-size+)))
+
+(deftype copy-offset ()
+  "A Snappy copy chunk offset value."
+ `(integer 1 #.(1- +maximum-block-size+)))
 
 (defmacro postincf (variable)
   (check-type variable symbol)
@@ -98,81 +110,64 @@ position INDEX to LIMIT."
     (check-type length snappy-index)
     (values length in)))
 
-(declaim (ftype (function (octet-vector vector-index octet-vector vector-index vector-index)
+(declaim (ftype (function (octet-vector vector-index octet-vector vector-index literal-length)
                           (values vector-index &optional))
                 emit-literal))
 
 (defun emit-literal (input-buffer literal output-buffer out length)
   (declare (type octet-vector input-buffer output-buffer)
-           (type vector-index literal out length))
+           (type vector-index literal out)
+           (type literal-length length))
   (let ((n (1- length)))                ; no literal has length zero
     (declare (type vector-index n))
-    (if (< n 60)
-        (setf (aref output-buffer (postincf out)) (logior +literal+ (ash n 2)))
-        (let ((base out)
-              (count 0))
-          (declare (type (integer 0 4) count))
-          (incf out)
-          (loop while (plusp n) do
-            (setf (aref output-buffer out) (ldb (byte 8 0) n))
-            (incf out)
-            (setf n (ash n -8))
-            (incf count))
-          ;; (assert (<= 1 count 4))
-          (setf (aref output-buffer base)
-                (logior +literal+ (ash (+ count 59) 2)))))
+    (cond ((< n 60)
+           (setf (aref output-buffer (postincf out)) (logior +literal+ (ash n 2))))
+          ((< n #.(ash 1 8))
+           (setf (aref output-buffer (postincf out)) (logior +literal+ #.(ash 60 2)))
+           (setf (aref output-buffer (postincf out)) n))
+          (t
+           (setf (aref output-buffer (postincf out)) (logior +literal+ #.(ash 61 2)))
+           (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) n))
+           (setf (aref output-buffer (postincf out)) (ldb (byte 8 8) n))))
     (replace output-buffer input-buffer
              :start1 out :end1 (+ out length)
              :start2 literal :end2 (+ literal length))
     (the vector-index (+ out length))))
 
-(declaim (ftype (function (octet-vector vector-index vector-index (integer 4 64))
-                          (values vector-index &optional))
-                emit-copy-less-than-64))
-
-(defun emit-copy-less-than-64 (output-buffer out offset length)
-  (declare (type octet-vector output-buffer)
-           (type vector-index out offset)
-           (type (integer 4 64) length))
-  ;; (assert (<= 4 length 64))
-  (cond ((and (< length 12) (< offset 2048))
-         (let ((length-4 (- length 4)))
-           ;; (assert (< length-4 8))
-           (setf (aref output-buffer (postincf out))
-                 (logior +copy-1-byte-offset+
-                         (ash length-4 2)
-                         (ash (ldb (byte 3 8) offset) 5)))
-           (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) offset))))
-        ((< offset 65536)
-         (setf (aref output-buffer (postincf out))
-               (logior +copy-2-byte-offset+ (ash (1- length) 2)))
-         (setf (ub16ref/le output-buffer out) offset)
-         (incf out 2))
-        (t
-         (setf (aref output-buffer (postincf out))
-               (logior +copy-4-byte-offset+ (ash (1- length) 2)))
-         (setf (ub32ref/le output-buffer out) offset)
-         (incf out 4)))
-  out)
-
-(declaim (ftype (function (octet-vector vector-index vector-index vector-index)
+(declaim (ftype (function (octet-vector vector-index copy-offset copy-length)
                           (values vector-index &optional))
                 emit-copy))
 
 (defun emit-copy (output-buffer out offset length)
   (declare (type octet-vector output-buffer)
-           (type vector-index out offset length))
-  ;; Emit 64 byte copies, but make sure to keep at least four bytes
-  ;; reserved.
+           (type vector-index out)
+           (type copy-offset offset)
+           (type copy-length length))
   (loop while (>= length 68) do
-    (setf out (emit-copy-less-than-64 output-buffer out offset 64))
+    ;; Length 64 copy, encoded in 3 octets.
+    (setf (aref output-buffer (postincf out)) (logior +copy-2-byte-offset+ #.(ash 63 2)))
+    (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) offset))
+    (setf (aref output-buffer (postincf out)) (ldb (byte 8 8) offset))
     (decf length 64))
-  ;; Emit an extra 60 byte copy, if have too much data to fit in one copy.
   (when (> length 64)
-    (setf out (emit-copy-less-than-64 output-buffer out offset 60))
+    ;; Length 60 copy, encoded in 3 octets.
+    (setf (aref output-buffer (postincf out)) (logior +copy-2-byte-offset+ #.(ash 59 2)))
+    (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) offset))
+    (setf (aref output-buffer (postincf out)) (ldb (byte 8 8) offset))
     (decf length 60))
-  ;; Emit remainder.
-  (emit-copy-less-than-64 output-buffer out offset length))
+  (when (or (>= length 12) (>= offset 2048))
+    ;; Remaining copy encoded in 3 octets.
+    (setf (aref output-buffer (postincf out)) (logior +copy-2-byte-offset+ (ash (1- length) 2)))
+    (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) offset))
+    (setf (aref output-buffer (postincf out)) (ldb (byte 8 8) offset))
+    (return-from emit-copy out))
+  ;; Remaining copy encoded in 2 octets.
+  (setf (aref output-buffer (postincf out))
+        (logior +copy-1-byte-offset+
+                (ash (- length 4) 2)
+                (ash (ldb (byte 8 8) offset) 5)))
+  (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) offset))
+  out)
 
 (declaim (ftype (function (octet-vector vector-index vector-index
                            octet-vector vector-index)
@@ -182,7 +177,6 @@ position INDEX to LIMIT."
 (defun raw-compress (input-buffer in in-limit output-buffer out)
   (declare (type octet-vector input-buffer output-buffer)
            (type vector-index in in-limit out))
-  ;; (assert (>= +maximum-hash-table-size+ 256))
   (let* ((in-length (- in-limit in))
          (shift +maximum-hash-shift+)
          (table-size (loop for size of-type table-size = +minimum-hash-table-size+ then (* 2 size)
