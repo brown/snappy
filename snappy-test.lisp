@@ -90,6 +90,12 @@ that the compressed copy produces OCTETS when uncompressed."
   (dolist (string '("" "a" "ab" "abc"))
     (verify-string string)))
 
+(deftest append-self ()
+  (verify-string "abcabcabcabcabcabcab")
+  (verify-string "abcabcabcabcabcabcab0123456789ABCDEF")
+  (verify-string "abcabcabcabcabcabcabcabcabcabcabcabc")
+  (verify-string "abcabcabcabcabcabcabcabcabcabcabcabc0123456789ABCDEF"))
+
 (deftest repeated-characters ()
   (dolist (count '(16 256 2047 65536))
     (let ((repeated-b (make-string count :initial-element #\b)))

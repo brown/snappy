@@ -63,15 +63,15 @@
 (defconst +copy-4-byte-offset+ 3)       ; unused by compression
 
 (deftype literal-length ()
-  "A Snappy literal chunk length value."
+  "A Snappy literal operation length value."
  `(integer 1 #.+maximum-block-size+))
 
 (deftype copy-length ()
-  "A Snappy copy chunk length value."
+  "A Snappy copy operation length value."
  `(integer 4 #.(1- +maximum-block-size+)))
 
 (deftype copy-offset ()
-  "A Snappy copy chunk offset value."
+  "A Snappy copy operation offset value."
  `(integer 1 #.(1- +maximum-block-size+)))
 
 (defmacro postincf (variable)
@@ -121,11 +121,11 @@ position INDEX to LIMIT."
     (declare (type vector-index n))
     (cond ((< n 60)
            (setf (aref output-buffer (postincf out)) (logior +literal+ (ash n 2))))
-          ((< n #.(ash 1 8))
-           (setf (aref output-buffer (postincf out)) (logior +literal+ #.(ash 60 2)))
+          ((< n (ash 1 8))
+           (setf (aref output-buffer (postincf out)) (logior +literal+ (ash 60 2)))
            (setf (aref output-buffer (postincf out)) n))
           (t
-           (setf (aref output-buffer (postincf out)) (logior +literal+ #.(ash 61 2)))
+           (setf (aref output-buffer (postincf out)) (logior +literal+ (ash 61 2)))
            (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) n))
            (setf (aref output-buffer (postincf out)) (ldb (byte 8 8) n))))
     (replace output-buffer input-buffer
@@ -144,13 +144,13 @@ position INDEX to LIMIT."
            (type copy-length length))
   (loop while (>= length 68) do
     ;; Length 64 copy, encoded in 3 octets.
-    (setf (aref output-buffer (postincf out)) (logior +copy-2-byte-offset+ #.(ash 63 2)))
+    (setf (aref output-buffer (postincf out)) (logior +copy-2-byte-offset+ (ash 63 2)))
     (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) offset))
     (setf (aref output-buffer (postincf out)) (ldb (byte 8 8) offset))
     (decf length 64))
   (when (> length 64)
     ;; Length 60 copy, encoded in 3 octets.
-    (setf (aref output-buffer (postincf out)) (logior +copy-2-byte-offset+ #.(ash 59 2)))
+    (setf (aref output-buffer (postincf out)) (logior +copy-2-byte-offset+ (ash 59 2)))
     (setf (aref output-buffer (postincf out)) (ldb (byte 8 0) offset))
     (setf (aref output-buffer (postincf out)) (ldb (byte 8 8) offset))
     (decf length 60))
@@ -186,6 +186,8 @@ position INDEX to LIMIT."
          (orig-in in)
          (next-emit (postincf in))
          (next-hash (hash (ub32ref/le input-buffer in) shift))
+         ;; Where to stop looking for copy operations.  The +INPUT-MARGIN+ constant is designed so
+         ;; we do not look beyond IN-LIMIT.
          (safe-in-limit (- in-limit +input-margin+)))
     (declare (type hash-shift shift))
 
@@ -344,11 +346,19 @@ the number of compressed octets in the vector."
                     (error "invalid offset 2"))
                   (when (> (+ out length) out-limit)
                     (error "output buffer too small 3"))
+                  (when (>= offset 8)
+                    ;; Source and destination are far apart, so we can copy by words without fear
+                    ;; of overlap.
+                    (loop while (>= length 8) do
+                      (setf (ub64ref/le output-buffer out) (ub64ref/le output-buffer copy))
+                      (incf out 8)
+                      (incf copy 8)
+                      (decf length 8)))
                   ;; Source and destination may overlap.
                   (loop repeat length do
                     (setf (aref output-buffer out) (aref output-buffer copy))
                     (incf out)
-                      (incf copy)))))))))
+                    (incf copy)))))))))
   (unless (= out out-limit)
     (error "bad decompressed length"))
   out)
