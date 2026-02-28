@@ -216,9 +216,18 @@ position INDEX to LIMIT."
           (loop
             (let ((base in))
               (incf in 4)
-              (loop for i upfrom (+ candidate 4)
-                    while (and (< in in-limit) (= (aref input-buffer i) (aref input-buffer in)))
-                    do (incf in))
+              (let ((match (+ candidate 4)))
+                ;; Extend the match, comparing 8 octets at a time, while we can.
+                (loop while (and (<= (+ in 8) in-limit)
+                                 (= (ub64ref/le input-buffer match) (ub64ref/le input-buffer in)))
+                      do (incf in 8)
+                         (incf match 8))
+                ;; Finish extending the match.
+                (loop while (and (< in in-limit)
+                                 (= (aref input-buffer match) (aref input-buffer in)))
+                      do (incf in)
+                         (incf match)))
+
               (setf out (emit-copy output-buffer out (- base candidate) (- in base)))
               (setf next-emit in)
               (when (>= in safe-in-limit)
