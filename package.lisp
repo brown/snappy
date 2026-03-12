@@ -43,6 +43,7 @@ designed for speed of compression and decompression.")
                 #:*optimize-default*
                 #:uint16
                 #:uint32
+                #:uint64
                 #:vector-index)
   (:import-from #:nibbles
                 #:ub16ref/le

@@ -78,14 +78,6 @@
   (check-type variable symbol)
   `(prog1 ,variable (incf ,variable)))
 
-(declaim (ftype (function (uint32 hash-shift) (values hash-result &optional)) hash)
-         (inline hash))
-
-(defun hash (x shift)
-  (declare (type uint32 x)
-           (type hash-shift shift))
-  (ash (logand (* x #x1e35a7bd) #xffffffff) (- shift)))
-
 (declaim (ftype (function (vector-index) (values vector-index &optional))
                 maximum-compressed-length))
 
@@ -108,6 +100,14 @@ position INDEX to LIMIT."
     (declare (ignore in))
     (check-type length snappy-index)
     length))
+
+(declaim (ftype (function (uint32 hash-shift) (values hash-result &optional)) hash)
+         (inline hash))
+
+(defun hash (x shift)
+  (declare (type uint32 x)
+           (type hash-shift shift))
+  (ash (logand (* x #x1e35a7bd) #xffffffff) (- shift)))
 
 (declaim (ftype (function (octet-vector vector-index octet-vector vector-index literal-length)
                           (values vector-index &optional))
@@ -132,6 +132,32 @@ position INDEX to LIMIT."
              :start1 out :end1 (+ out length)
              :start2 literal :end2 (+ literal length))
     (the vector-index (+ out length))))
+
+(declaim (ftype (function (octet-vector vector-index vector-index vector-index)
+                          (values vector-index &optional))
+                extend-match)
+         (inline extend-match))
+
+(defun extend-match (input-buffer match in in-limit)
+  (declare (type octet-vector input-buffer)
+           (type vector-index match in in-limit))
+  (flet ((count-trailing-zeroes (n)
+           (1- (integer-length (logand n (- n))))))
+    (declare (inline count-trailing-zeroes))
+    (loop while (<= in (- in-limit 8)) do
+      (let ((in-word (ub64ref/le input-buffer in))
+            (match-word (ub64ref/le input-buffer match)))
+        (if (= in-word match-word)
+            (progn (incf in 8)
+                   (incf match 8))
+            (let ((matching-bits (count-trailing-zeroes (logxor in-word match-word))))
+              (incf in (ash matching-bits -3))
+              (return-from extend-match in)))))
+    (loop while (and (< in in-limit)
+                     (= (aref input-buffer match) (aref input-buffer in)))
+          do (incf in)
+             (incf match))
+    in))
 
 (declaim (ftype (function (octet-vector vector-index copy-offset copy-length)
                           (values vector-index &optional))
@@ -186,8 +212,8 @@ position INDEX to LIMIT."
          (orig-in in)
          (next-emit (postincf in))
          (next-hash (hash (ub32ref/le input-buffer in) shift))
-         ;; Where to stop looking for copy operations.  The +INPUT-MARGIN+ constant is designed so
-         ;; we do not look beyond IN-LIMIT.
+         ;; Where to stop looking for copy operations.  +INPUT-MARGIN+ is big enough that we never
+         ;; look beyond IN-LIMIT in the code below.
          (safe-in-limit (- in-limit +input-margin+)))
     (declare (type hash-shift shift))
 
@@ -215,19 +241,7 @@ position INDEX to LIMIT."
 
           (loop
             (let ((base in))
-              (incf in 4)
-              (let ((match (+ candidate 4)))
-                ;; Extend the match, comparing 8 octets at a time, while we can.
-                (loop while (and (<= (+ in 8) in-limit)
-                                 (= (ub64ref/le input-buffer match) (ub64ref/le input-buffer in)))
-                      do (incf in 8)
-                         (incf match 8))
-                ;; Finish extending the match.
-                (loop while (and (< in in-limit)
-                                 (= (aref input-buffer match) (aref input-buffer in)))
-                      do (incf in)
-                         (incf match)))
-
+              (setf in (extend-match input-buffer (+ candidate 4) (+ in 4) in-limit))
               (setf out (emit-copy output-buffer out (- base candidate) (- in base)))
               (setf next-emit in)
               (when (>= in safe-in-limit)
@@ -400,11 +414,11 @@ LIMIT.  Returns the uncompressed data as a vector of (UNSIGNED-BYTE 8)."
 (deftype decompression-entry () '(unsigned-byte 16))
 
 (defconst +decompression-table+
-  (labels ((make-entry (extra length copy-offset)
-             (assert (<= (integer-length extra) 3))
-             (assert (<= (integer-length copy-offset) 3))
-             (assert (<= (integer-length length) 7))
-             (logior length (ash copy-offset 8) (ash extra 11))))
+  (flet ((make-entry (extra length copy-offset)
+           (assert (<= (integer-length extra) 3))
+           (assert (<= (integer-length copy-offset) 3))
+           (assert (<= (integer-length length) 7))
+           (logior length (ash copy-offset 8) (ash extra 11))))
     (declare #.*optimize-default*)
     ;; Initialize dst with invalid entries.
     (let* ((illegal-entry #xffff)
